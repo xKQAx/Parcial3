@@ -25,6 +25,7 @@ export const ORIENTATION = Object.freeze({
 });
 
 export const GAME_PHASE = Object.freeze({
+  WELCOME: "welcome",
   PLACING: "placing",
   BATTLE: "battle",
   ENDED: "ended",
