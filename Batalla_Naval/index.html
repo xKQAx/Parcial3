@@ -11,22 +11,7 @@
     />
     <link rel="stylesheet" href="css/battle.css" type="text/css" />
     <title>Batalla naval</title>
-  </head>11
-  Edición de colocación de naves
-  Una vez colocada una nave en el tablero no era posible moverla ni retirarla; un error obligaba a recargar la página o a empezar mal el juego.
-  Mejora
-  Alto
-  12
-  Previsualización de colocación
-  Al colocar un barco no había indicación previa de qué celdas iba a ocupar ni de si la posición era válida; el jugador colocaba "a ciegas" y descubría el error solo después del clic.
-  Mejora
-  Medio
-  13
-  Reinicio del juego
-  No existía un botón para reiniciar la partida (ni durante la colocación, ni durante la batalla, ni al terminar); la única forma de jugar otra vez era recargar el navegador.
-  Correctivo
-  Alto
-  
+  </head>
   <body>
     <header class="app-header">
       <h1 class="app-title">Batalla Naval</h1>
@@ -37,6 +22,8 @@
 
     <main class="container app-main">
       <section id="turnIndicator" class="turn-indicator-host"></section>
+
+      <section id="progressBars" class="progress-bars" aria-label="Progreso de la partida"></section>
 
       <section class="boards-row row">
         <div class="col-12 col-lg-6 board-col">
@@ -63,22 +50,31 @@
             <ul class="board-legend" aria-label="Leyenda">
               <li><span class="legend-swatch legend-swatch--hit"></span>Impacto</li>
               <li><span class="legend-swatch legend-swatch--miss"></span>Agua</li>
+              <li><span class="legend-swatch legend-swatch--revealed"></span>Sin descubrir</li>
             </ul>
           </div>
         </div>
       </section>
 
-      <section class="ships-section">
-        <header class="ships-section__header">
-          <h3 class="ships-section__title">Tus naves</h3>
-          <p class="ships-section__hint">
-            Selecciona un barco y su orientación, luego haz clic en tu tablero para colocarlo.
-          </p>
-        </header>
-        <div id="shipPanel" class="ship-panel"></div>
+      <section class="info-row row">
+        <div class="col-12 col-lg-6 info-col">
+          <div class="ships-section">
+            <header class="ships-section__header">
+              <h3 class="ships-section__title">Tus naves</h3>
+              <p class="ships-section__hint">
+                Selecciona un barco y su orientación, luego haz clic en tu tablero para colocarlo.
+              </p>
+            </header>
+            <div id="shipPanel" class="ship-panel"></div>
+          </div>
+        </div>
+        <div class="col-12 col-lg-6 info-col">
+          <div id="shotHistory" class="shot-history"></div>
+        </div>
       </section>
 
       <div class="actions-row">
+        <div id="difficultyToggle" class="difficulty-toggle"></div>
         <button type="button" id="button" class="btn-start" disabled>
           Empezar juego
         </button>

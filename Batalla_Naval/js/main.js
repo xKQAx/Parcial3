@@ -20,12 +20,14 @@ import {
   isCellShot,
   markShot,
   removeCellClasses,
+  revealRemainingShips,
 } from "./ui/domBoard.js";
 import { notify } from "./ui/notifications.js";
 import { showWelcome } from "./ui/welcome.js";
 import {
   hideTurnIndicator,
   mountTurnIndicator,
+  setShotCount,
   setTurn,
 } from "./ui/turnIndicator.js";
 import {
@@ -39,9 +41,27 @@ import {
   clearPreview,
   detachPreview,
 } from "./ui/placementPreview.js";
+import {
+  addShotEntry,
+  clearShotHistory,
+  mountShotHistory,
+} from "./ui/shotHistory.js";
+import {
+  mountProgressBars,
+  resetProgressBars,
+  updateProgress,
+} from "./ui/progressBar.js";
+import {
+  mountDifficultyToggle,
+  setEnabled as setDifficultyEnabled,
+  setValue as setDifficultyValue,
+} from "./ui/difficultyToggle.js";
+import { createAi, DIFFICULTY } from "./ai.js";
 
 /** Pequeño retardo para que los disparos del PC no se sientan instantáneos. */
 const PC_TURN_DELAY_MS = 600;
+/** Total de barcos por flota (suma de counts en FLEET_BY_TYPE). */
+const TOTAL_SHIPS = FLEET_BY_TYPE.reduce((acc, t) => acc + t.count, 0);
 
 /** Estado del juego encapsulado en un objeto para facilitar el reinicio. */
 function createInitialState() {
@@ -53,6 +73,16 @@ function createInitialState() {
     placementChoice: null,
     /** Barcos colocados por el jugador. Permite retirarlos por click. */
     placedShips: [],
+    /** Barcos colocados por el PC (los rellena placeFleetRandom). */
+    pcPlacedShips: [],
+    /** Disparos totales (jugador + PC) para el contador de turnos. */
+    shotsFired: 0,
+    /** Hundidos por bando, indexado por owner. */
+    sunkCounts: { [OWNER.PLAYER]: 0, [OWNER.PC]: 0 },
+    /** Dificultad seleccionada en el modal de bienvenida. */
+    difficulty: DIFFICULTY.EASY,
+    /** Instancia de IA (Strategy). Se crea al iniciar la batalla. */
+    ai: null,
   };
 }
 
@@ -63,21 +93,42 @@ function init() {
   const resetBtn = document.querySelector("#resetButton");
   const shipPanelEl = document.querySelector("#shipPanel");
   const turnIndicatorEl = document.querySelector("#turnIndicator");
+  const shotHistoryEl = document.querySelector("#shotHistory");
+  const progressBarsEl = document.querySelector("#progressBars");
+  const difficultyToggleEl = document.querySelector("#difficultyToggle");
 
   /** @type {ReturnType<typeof createInitialState>} */
   let state = createInitialState();
   state.phase = GAME_PHASE.WELCOME;
 
   mountTurnIndicator(turnIndicatorEl);
+  mountShotHistory(shotHistoryEl);
+  mountProgressBars({ container: progressBarsEl, total: TOTAL_SHIPS });
+  mountDifficultyToggle({
+    container: difficultyToggleEl,
+    initial: state.difficulty,
+    onChange: (difficulty) => {
+      // Solo se puede cambiar fuera de batalla (el toggle está deshabilitado
+      // durante BATTLE/ENDED, esta guarda es defensa adicional).
+      if (state.phase === GAME_PHASE.BATTLE) return;
+      state.difficulty = difficulty;
+    },
+  });
   renderPlacementUI();
 
   startBtn.addEventListener("click", onStartGame);
   resetBtn.addEventListener("click", () => resetGame({ showToast: true }));
 
   showWelcome({
-    onStart: () => {
+    onStart: ({ difficulty }) => {
       state.phase = GAME_PHASE.PLACING;
-      notify.info("Coloca todos tus barcos para comenzar.");
+      state.difficulty = difficulty;
+      setDifficultyValue(difficulty);
+      notify.info(
+        difficulty === DIFFICULTY.HARD
+          ? "Modo Difícil. Coloca todos tus barcos para comenzar."
+          : "Coloca todos tus barcos para comenzar."
+      );
     },
   });
 
@@ -93,6 +144,11 @@ function init() {
     });
     startBtn.disabled = true;
     hideTurnIndicator();
+    setShotCount(0);
+    clearShotHistory();
+    resetProgressBars();
+    setDifficultyValue(state.difficulty);
+    setDifficultyEnabled(true);
 
     attachPreview({
       root: boardEl,
@@ -110,7 +166,9 @@ function init() {
 
   function resetGame({ showToast = false } = {}) {
     detachPreview();
+    const previousDifficulty = state.difficulty;
     state = createInitialState();
+    state.difficulty = previousDifficulty;
     renderPlacementUI();
     if (showToast) notify.info("Juego reiniciado. Coloca tus barcos.");
   }
@@ -143,7 +201,6 @@ function init() {
     const row = Number.parseInt(cell.dataset.row, 10);
     const col = Number.parseInt(cell.dataset.col, 10);
 
-    // Click sobre celda con barco colocado: lo retira (permite corregir).
     if (state.playerBoard[row][col] === CELL.SHIP) {
       removePlacedShipAt(row, col);
       return;
@@ -226,7 +283,7 @@ function init() {
 
     state.pcBoard = createEmptyBoard();
     try {
-      placeFleetRandom(
+      state.pcPlacedShips = placeFleetRandom(
         state.pcBoard,
         FLEET_BY_TYPE.map((t) => ({ length: t.length, count: t.count }))
       );
@@ -236,16 +293,46 @@ function init() {
       return;
     }
 
+    state.ai = createAi(state.difficulty, BOARD_SIZE);
+
     detachPreview();
     createBoardGrid(boardAttackEl, OWNER.PC, onPlayerShotClick);
     state.phase = GAME_PHASE.BATTLE;
     startBtn.disabled = true;
     disableShipPanel();
+    setDifficultyEnabled(false);
     setTurn(OWNER.PLAYER);
-    notify.info("¡Comienza la batalla! Es tu turno.");
+    setShotCount(state.shotsFired);
+    notify.info(
+      state.difficulty === DIFFICULTY.HARD
+        ? "¡Comienza la batalla! Modo Difícil. Es tu turno."
+        : "¡Comienza la batalla! Es tu turno."
+    );
   }
 
   // ----------------------- Disparos ---------------------------------------
+
+  /**
+   * Detecta si un barco de `ships` que contiene la cell (row,col) está hundido
+   * (todas sus cells en CELL.HIT). Devuelve el barco hundido o null.
+   */
+  function findSunkShipAt(ships, board, row, col) {
+    const ship = ships.find((s) =>
+      s.cells.some(([r, c]) => r === row && c === col)
+    );
+    if (!ship) return null;
+    const allHit = ship.cells.every(([r, c]) => board[r][c] === CELL.HIT);
+    return allHit ? ship : null;
+  }
+
+  function shipNameOf(typeIndex) {
+    return FLEET_BY_TYPE[typeIndex]?.name ?? "barco";
+  }
+
+  function incShots() {
+    state.shotsFired += 1;
+    setShotCount(state.shotsFired);
+  }
 
   function onPlayerShotClick(event) {
     if (state.phase !== GAME_PHASE.BATTLE || !state.pcBoard) return;
@@ -263,17 +350,39 @@ function init() {
       return;
     }
 
+    incShots();
+
     if (state.pcBoard[row][col] === CELL.SHIP) {
       state.pcBoard[row][col] = CELL.HIT;
       addCellClass(OWNER.PC, row, col, "hit");
       markShot(OWNER.PC, row, col);
-      notify.success("¡Tocado! Vuelve a disparar.");
-      if (isFleetDestroyed(state.pcBoard)) {
-        state.phase = GAME_PHASE.ENDED;
-        hideTurnIndicator();
-        notify.success("¡GANASTE! Hundiste toda la flota enemiga.", {
-          duration: 5000,
+
+      const sunkShip = findSunkShipAt(
+        state.pcPlacedShips,
+        state.pcBoard,
+        row,
+        col
+      );
+      if (sunkShip) {
+        const name = shipNameOf(sunkShip.typeIndex);
+        for (const [r, c] of sunkShip.cells) addCellClass(OWNER.PC, r, c, "sunk");
+        state.sunkCounts[OWNER.PC] += 1;
+        updateProgress(OWNER.PC, state.sunkCounts[OWNER.PC]);
+        addShotEntry({
+          owner: OWNER.PLAYER,
+          row,
+          col,
+          result: "sunk",
+          shipName: name,
         });
+        notify.success(`¡Hundiste el ${name}!`, { duration: 3500 });
+      } else {
+        addShotEntry({ owner: OWNER.PLAYER, row, col, result: "hit" });
+        notify.success("¡Tocado! Vuelve a disparar.");
+      }
+
+      if (isFleetDestroyed(state.pcBoard)) {
+        endGame(OWNER.PLAYER);
       }
       return;
     }
@@ -281,35 +390,22 @@ function init() {
     state.pcBoard[row][col] = CELL.MISS;
     addCellClass(OWNER.PC, row, col, "miss");
     markShot(OWNER.PC, row, col);
+    addShotEntry({ owner: OWNER.PLAYER, row, col, result: "miss" });
     notify.info("Agua. Turno del PC.");
     setTurn(OWNER.PC);
     setTimeout(runPcTurn, PC_TURN_DELAY_MS);
   }
 
-  /** Replica la lógica original: el PC repite disparo si acierta o si cae en celda ya disparada. */
+  /**
+   * El PC dispara según la AI seleccionada (Strategy). Si acierta o cae en
+   * celda ya disparada, vuelve a tirar (lógica original).
+   */
   function runPcTurn() {
     if (state.phase !== GAME_PHASE.BATTLE) return;
 
-    const row = Math.floor(Math.random() * BOARD_SIZE);
-    const col = Math.floor(Math.random() * BOARD_SIZE);
+    const [row, col] = state.ai.chooseShot();
 
-    if (state.playerBoard[row][col] === CELL.SHIP) {
-      state.playerBoard[row][col] = CELL.HIT;
-      addCellClass(OWNER.PLAYER, row, col, "hit");
-      markShot(OWNER.PLAYER, row, col);
-      notify.error("¡Te han dado!");
-      if (isFleetDestroyed(state.playerBoard)) {
-        state.phase = GAME_PHASE.ENDED;
-        hideTurnIndicator();
-        notify.error("Ha ganado el PC. Tu flota ha sido hundida.", {
-          duration: 5000,
-        });
-        return;
-      }
-      setTimeout(runPcTurn, PC_TURN_DELAY_MS);
-      return;
-    }
-
+    // Salvavidas defensivo: si la AI por error eligió una celda ya disparada.
     if (
       state.playerBoard[row][col] === CELL.HIT ||
       state.playerBoard[row][col] === CELL.MISS
@@ -318,11 +414,75 @@ function init() {
       return;
     }
 
+    incShots();
+
+    if (state.playerBoard[row][col] === CELL.SHIP) {
+      state.playerBoard[row][col] = CELL.HIT;
+      addCellClass(OWNER.PLAYER, row, col, "hit");
+      markShot(OWNER.PLAYER, row, col);
+
+      const sunkShip = findSunkShipAt(
+        state.placedShips,
+        state.playerBoard,
+        row,
+        col
+      );
+      if (sunkShip) {
+        const name = shipNameOf(sunkShip.typeIndex);
+        for (const [r, c] of sunkShip.cells) {
+          addCellClass(OWNER.PLAYER, r, c, "sunk");
+        }
+        state.sunkCounts[OWNER.PLAYER] += 1;
+        updateProgress(OWNER.PLAYER, state.sunkCounts[OWNER.PLAYER]);
+        addShotEntry({
+          owner: OWNER.PC,
+          row,
+          col,
+          result: "sunk",
+          shipName: name,
+        });
+        notify.error(`El PC hundió tu ${name}.`, { duration: 3500 });
+        state.ai.recordResult(row, col, "sunk");
+      } else {
+        addShotEntry({ owner: OWNER.PC, row, col, result: "hit" });
+        notify.error("¡Te han dado!");
+        state.ai.recordResult(row, col, "hit");
+      }
+
+      if (isFleetDestroyed(state.playerBoard)) {
+        endGame(OWNER.PC);
+        return;
+      }
+      setTimeout(runPcTurn, PC_TURN_DELAY_MS);
+      return;
+    }
+
     state.playerBoard[row][col] = CELL.MISS;
     addCellClass(OWNER.PLAYER, row, col, "miss");
     markShot(OWNER.PLAYER, row, col);
+    addShotEntry({ owner: OWNER.PC, row, col, result: "miss" });
     notify.info("El disparo del PC cayó al agua. Tu turno.");
+    state.ai.recordResult(row, col, "miss");
     setTurn(OWNER.PLAYER);
+  }
+
+  function endGame(winner) {
+    state.phase = GAME_PHASE.ENDED;
+    hideTurnIndicator();
+    if (winner === OWNER.PLAYER) {
+      // Revelar barcos enemigos no hundidos (los que tenían cells sin tocar).
+      revealRemainingShips(OWNER.PC, state.pcPlacedShips);
+      notify.success(
+        `¡GANASTE en ${state.shotsFired} disparos! Hundiste toda la flota enemiga.`,
+        { duration: 6000 }
+      );
+    } else {
+      revealRemainingShips(OWNER.PC, state.pcPlacedShips);
+      notify.error(
+        `Ha ganado el PC en ${state.shotsFired} disparos. Tu flota ha sido hundida.`,
+        { duration: 6000 }
+      );
+    }
   }
 }
 

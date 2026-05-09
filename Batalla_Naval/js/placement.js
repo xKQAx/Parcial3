@@ -36,27 +36,38 @@ const MAX_PLACE_ATTEMPTS = 800;
  * Coloca la flota del PC en orden por tipo, igual que el juego original.
  * @param {string[][]} board
  * @param {ReadonlyArray<{ length: number, count: number }>} fleetByType
+ * @returns {Array<{ typeIndex: number, length: number, orientation: string, cells: Array<[number, number]> }>}
+ *   Lista de barcos colocados con sus celdas (necesario para detectar hundimientos
+ *   y revelar posiciones al terminar la partida).
  */
 export function placeFleetRandom(board, fleetByType) {
+  const placed = [];
   for (let typeIndex = 0; typeIndex < fleetByType.length; typeIndex++) {
     const { length, count } = fleetByType[typeIndex];
     for (let n = 0; n < count; n++) {
-      let placed = false;
-      for (let attempt = 0; attempt < MAX_PLACE_ATTEMPTS && !placed; attempt++) {
+      let done = false;
+      for (let attempt = 0; attempt < MAX_PLACE_ATTEMPTS && !done; attempt++) {
         const orientation =
           Math.random() < 0.5 ? ORIENTATION.HORIZONTAL : ORIENTATION.VERTICAL;
         const row = Math.floor(Math.random() * BOARD_SIZE);
         const col = Math.floor(Math.random() * BOARD_SIZE);
         if (canPlaceShip(board, row, col, length, orientation)) {
           placeShip(board, row, col, length, orientation);
-          placed = true;
+          placed.push({
+            typeIndex,
+            length,
+            orientation,
+            cells: getShipCells(row, col, length, orientation),
+          });
+          done = true;
         }
       }
-      if (!placed) {
+      if (!done) {
         throw new Error(
           "No se pudo colocar todos los barcos del PC; intente de nuevo."
         );
       }
     }
   }
+  return placed;
 }

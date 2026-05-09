@@ -1,8 +1,8 @@
 /**
- * Indicador visual de turno (Tú / PC).
+ * Indicador visual de turno (Tú / PC) y contador de disparos.
  *
- * SRP: solo dibuja y actualiza dos chips. La decisión de qué turno mostrar
- * la toma main.js tras cada disparo.
+ * SRP: solo dibuja y actualiza dos chips + contador. La decisión de qué
+ * turno mostrar y cuántos disparos llevamos la toma main.js tras cada disparo.
  */
 
 import { OWNER } from "../config.js";
@@ -33,10 +33,14 @@ export function mountTurnIndicator(container) {
   pcChip.dataset.owner = OWNER.PC;
   pcChip.textContent = "PC";
 
-  wrap.append(label, playerChip, pcChip);
+  const counter = document.createElement("span");
+  counter.className = "turn-indicator__counter";
+  counter.textContent = "Disparos: 0";
+
+  wrap.append(label, playerChip, pcChip, counter);
   container.appendChild(wrap);
 
-  mounted = { wrap, playerChip, pcChip };
+  mounted = { wrap, playerChip, pcChip, counter };
   hideTurnIndicator();
 }
 
@@ -47,6 +51,12 @@ export function setTurn(owner) {
   const isPlayer = owner === OWNER.PLAYER;
   mounted.playerChip.classList.toggle("is-active", isPlayer);
   mounted.pcChip.classList.toggle("is-active", !isPlayer);
+}
+
+/** Actualiza el contador de disparos visible junto a los chips. */
+export function setShotCount(count) {
+  if (!mounted) return;
+  mounted.counter.textContent = `Disparos: ${count}`;
 }
 
 export function hideTurnIndicator() {

@@ -61,3 +61,24 @@ export function isCellShot(owner, row, col) {
   const el = getCellElement(owner, row, col);
   return !!el && el.classList.contains("shot");
 }
+
+/**
+ * Revela las celdas de los barcos del owner que aún no fueron golpeadas
+ * (clase `ship-revealed`). Útil al terminar la partida para mostrar dónde
+ * estaban los barcos no encontrados.
+ * @param {string} owner
+ * @param {Array<{ cells: Array<[number, number]> }>} placedShips
+ */
+export function revealRemainingShips(owner, placedShips) {
+  if (!Array.isArray(placedShips)) return;
+  for (const ship of placedShips) {
+    for (const [r, c] of ship.cells) {
+      const el = getCellElement(owner, r, c);
+      if (!el) continue;
+      if (el.classList.contains("hit") || el.classList.contains("sunk")) {
+        continue;
+      }
+      el.classList.add("ship-revealed");
+    }
+  }
+}
